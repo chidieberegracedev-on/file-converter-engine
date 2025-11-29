@@ -203,3 +203,9 @@ async def cleanup(request: Request, x_api_key: Optional[str] = Header(None)):
         except Exception:
             pass
     return JSONResponse({'success': True, 'removed': removed})
+if _name_ == "_main_":
+    import uvicorn
+    import os
+
+    PORT = int(os.environ.get("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
