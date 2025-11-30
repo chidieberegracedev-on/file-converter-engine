@@ -6,6 +6,7 @@ from typing import List, Optional
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Header, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, UnidentifiedImageError
 import img2pdf
 import PyPDF2
@@ -17,7 +18,18 @@ load_dotenv()
 
 API_SECRET = os.getenv('API_SECRET')  # optional, set in your host env if you want auth
 
+# ----------------------------
+# CORS REQUIRED FOR FLUTTERFLOW
+# ----------------------------
 app = FastAPI(title='Digit5 Converter API')
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # or restrict to your flutterflow domain
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ensure outputs directory exists
 OUTPUT_DIR = os.path.join(os.getcwd(), 'outputs')
@@ -44,7 +56,6 @@ async def health():
 
 @app.post('/convert/image-to-pdf')
 async def image_to_pdf(request: Request, x_api_key: Optional[str] = Header(None), files: List[UploadFile] = File(...)):
-    """Accepts one or more images (field name 'file') and returns a single PDF."""
     _check_secret(x_api_key)
     if not files or len(files) == 0:
         raise HTTPException(status_code=400, detail='No files uploaded. Use field name "file".')
@@ -52,7 +63,6 @@ async def image_to_pdf(request: Request, x_api_key: Optional[str] = Header(None)
     images_bytes = []
     for f in files:
         content = await f.read()
-        # verify it's an image
         try:
             Image.open(io.BytesIO(content)).verify()
         except Exception:
@@ -69,20 +79,18 @@ async def image_to_pdf(request: Request, x_api_key: Optional[str] = Header(None)
     async with aiofiles.open(out_path, 'wb') as out_file:
         await out_file.write(pdf_bytes)
 
-    # return a path under /outputs; your host base domain + /outputs/<file> will serve it
     return JSONResponse({'success': True, 'fileUrl': f"/outputs/{out_name}", 'filename': out_name})
 
 
 @app.post('/convert/scan-to-pdf')
 async def scan_to_pdf(request: Request, x_api_key: Optional[str] = Header(None), files: List[UploadFile] = File(...)):
-    # alias of image_to_pdf (keeps same behavior)
     return await image_to_pdf(request, x_api_key, files)
 
 
 @app.post('/convert/image-to-image')
 async def image_to_image(request: Request, x_api_key: Optional[str] = Header(None),
                          file: UploadFile = File(...), target_format: str = Form(...)):
-    """Convert single uploaded image to target format: png, webp, jpeg."""
+
     _check_secret(x_api_key)
     content = await file.read()
     try:
@@ -105,7 +113,7 @@ async def image_to_image(request: Request, x_api_key: Optional[str] = Header(Non
 @app.post('/convert/image-compress')
 async def image_compress(request: Request, x_api_key: Optional[str] = Header(None),
                          file: UploadFile = File(...), quality: int = Form(75)):
-    """Compress image (saves as JPG). quality 5-95"""
+
     _check_secret(x_api_key)
     content = await file.read()
     try:
@@ -124,9 +132,10 @@ async def image_compress(request: Request, x_api_key: Optional[str] = Header(Non
 
 @app.post('/convert/pdf-to-images')
 async def pdf_to_images(request: Request, x_api_key: Optional[str] = Header(None), file: UploadFile = File(...)):
-    """Return PNG images for each PDF page (list of file URLs)."""
+
     _check_secret(x_api_key)
     content = await file.read()
+
     try:
         doc = fitz.open(stream=content, filetype='pdf')
     except Exception:
@@ -136,7 +145,7 @@ async def pdf_to_images(request: Request, x_api_key: Optional[str] = Header(None
     for i, page in enumerate(doc):
         pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
         img_bytes = pix.tobytes('png')
-        out_name = _unique_filename(f'page_{i+1}', 'png')
+        out_name = unique_filename(f'page{i+1}', 'png')
         out_path = os.path.join(OUTPUT_DIR, out_name)
         async with aiofiles.open(out_path, 'wb') as f:
             await f.write(img_bytes)
@@ -147,6 +156,7 @@ async def pdf_to_images(request: Request, x_api_key: Optional[str] = Header(None
 
 @app.post('/convert/pdf-merge')
 async def pdf_merge(request: Request, x_api_key: Optional[str] = Header(None), files: List[UploadFile] = File(...)):
+
     _check_secret(x_api_key)
     if not files or len(files) < 2:
         raise HTTPException(status_code=400, detail='Upload two or more PDF files to merge')
@@ -171,8 +181,10 @@ async def pdf_merge(request: Request, x_api_key: Optional[str] = Header(None), f
 
 @app.post('/convert/pdf-split')
 async def pdf_split(request: Request, x_api_key: Optional[str] = Header(None), file: UploadFile = File(...)):
+
     _check_secret(x_api_key)
     content = await file.read()
+
     try:
         reader = PyPDF2.PdfReader(io.BytesIO(content))
     except Exception:
@@ -182,7 +194,7 @@ async def pdf_split(request: Request, x_api_key: Optional[str] = Header(None), f
     for i, page in enumerate(reader.pages):
         writer = PyPDF2.PdfWriter()
         writer.add_page(page)
-        out_name = _unique_filename(f'split_{i+1}', 'pdf')
+        out_name = unique_filename(f'split{i+1}', 'pdf')
         out_path = os.path.join(OUTPUT_DIR, out_name)
         with open(out_path, 'wb') as out_f:
             writer.write(out_f)
@@ -193,7 +205,6 @@ async def pdf_split(request: Request, x_api_key: Optional[str] = Header(None), f
 
 @app.post('/cleanup')
 async def cleanup(request: Request, x_api_key: Optional[str] = Header(None)):
-    """Manually delete files in outputs/ (protect in production)."""
     _check_secret(x_api_key)
     removed = 0
     for fn in os.listdir(OUTPUT_DIR):
